@@ -8,7 +8,7 @@ from twisted.python import failure
 
 from scrapyd import __version__
 from scrapyd.config import Config
-from scrapyd.launcher import Launcher, get_crawl_args
+from scrapyd.launcher import Launcher, get_crawl_args, get_launch_message
 from tests import get_message, has_settings
 
 
@@ -41,6 +41,60 @@ def process(launcher):
 )
 def test_get_crawl_args(message, expected):
     assert get_crawl_args(message) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            {"_project": "p1", "_spider": "s1", "_job": "j1"},
+            {"version": None, "settings": {}, "args": {}},
+        ),
+        (
+            {
+                "_project": "p1",
+                "_spider": "s1",
+                "_job": "j1",
+                "_version": "0.1",
+                "settings": {"ONE": "two"},
+                "arg1": "val1",
+            },
+            {"version": "0.1", "settings": {"ONE": "two"}, "args": {"arg1": "val1"}},
+        ),
+        # The queue uses "name" (renamed to "_spider" by the poller); both forms are reserved.
+        (
+            {"name": "s1", "_job": "j1", "arg1": "val1"},
+            {"version": None, "settings": {}, "args": {"arg1": "val1"}},
+        ),
+    ],
+)
+def test_get_launch_message(message, expected):
+    assert get_launch_message(message) == expected
+
+
+def test_spawn_process_snapshots_launch_before_settings(launcher):
+    message = {
+        "_project": "localproject",
+        "_spider": "s1",
+        "_job": "j1",
+        "_version": "0.1",
+        "settings": {"DOWNLOAD_DELAY": "2"},
+        "arg1": "val1",
+    }
+    original_settings = dict(message["settings"])
+
+    launcher._spawn_process(message, 1)  # noqa: SLF001
+
+    process = launcher.processes[1]
+
+    # The audited parameters are the submitted ones, without the environment settings merged in by the launcher.
+    assert process.launch == {
+        "version": "0.1",
+        "settings": original_settings,
+        "args": {"arg1": "val1"},
+    }
+    # The live settings still receive the environment additions (used to build the crawl CLI args).
+    assert "LOG_FILE" in message["settings"]
 
 
 def test_start_service(launcher):

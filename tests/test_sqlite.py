@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 
 import pytest
 
@@ -148,3 +149,56 @@ def test_sqlitefinishedjobs__iter__(sqlitefinishedjobs):
     assert (actual[0][0], actual[0][1]) == ("p3", "s3")
     assert (actual[1][0], actual[1][1]) == ("p2", "s2")
     assert (actual[2][0], actual[2][1]) == ("p1", "s1")
+
+
+def test_sqlitefinishedjobs_launch_roundtrip():
+    q = SqliteFinishedJobs(":memory:")
+    job = get_finished_job("p1", "s1", "j1", end_time=datetime.datetime(2001, 2, 3, 4, 5, 6, 7))
+    launch = {"version": "0.1", "settings": {"DOWNLOAD_DELAY": "2"}, "args": {"arg1": "val1"}}
+    job.launch = launch
+
+    q.add(job)
+
+    row = next(iter(q))
+    assert row[5] == launch
+
+
+def test_sqlitefinishedjobs_migrates_legacy_table(tmp_path):
+    """A table created before launch parameters were persisted gets a nullable launch column, and stays readable."""
+    database = str(tmp_path / "legacy.db")
+
+    # Create and populate a table using the old schema (no launch column).
+    start = datetime.datetime(2001, 2, 3, 4, 5, 6, 7)
+    end = datetime.datetime(2001, 2, 3, 4, 5, 6, 8)
+    conn = sqlite3.connect(database)
+    conn.execute(
+        "CREATE TABLE finished_jobs "
+        "(id integer PRIMARY KEY, project text, spider text, job text, start_time datetime, end_time datetime)"
+    )
+    conn.execute(
+        "INSERT INTO finished_jobs (project, spider, job, start_time, end_time) VALUES (?, ?, ?, ?, ?)",
+        ("p1", "s1", "j1", start, end),
+    )
+    conn.commit()
+    conn.close()
+
+    # Opening the storage migrates the schema and reads the legacy row without error.
+    q = SqliteFinishedJobs(database, "finished_jobs")
+
+    actual = list(q)
+    assert len(actual) == 1
+    project, spider, jobid, start_time, end_time, launch = actual[0]
+    assert (project, spider, jobid) == ("p1", "s1", "j1")
+    assert start_time == start
+    assert end_time == end
+    # Legacy rows have no launch parameters and decode to the documented empty shape.
+    assert launch == {"version": None, "settings": {}, "args": {}}
+
+    # New rows persist their launch parameters alongside the migrated legacy row.
+    new_job = get_finished_job("p2", "s2", "j2", end_time=end + datetime.timedelta(seconds=1))
+    new_job.launch = {"version": "0.2", "settings": {"ONE": "two"}, "args": {"arg": "val"}}
+    q.add(new_job)
+
+    by_job = {row[2]: row[5] for row in q}
+    assert by_job["j2"] == {"version": "0.2", "settings": {"ONE": "two"}, "args": {"arg": "val"}}
+    assert by_job["j1"] == {"version": None, "settings": {}, "args": {}}

@@ -89,7 +89,7 @@ A **running job** is a ``ScrapyProcessProtocol`` object, accessible via ``Launch
 -  ``Launcher`` has a ``finished`` attribute, which is an :py:interface:`~scrapyd.interfaces.IJobStorage`.
 -  When the process ends, the callback fires. The ``Launcher`` service calls :py:interface:`~scrapyd.interfaces.IJobStorage`'s :meth:`~scrapyd.interfaces.IJobStorage.add` method, passing the ``ScrapyProcessProtocol`` as input.
 
-A **finished job** is an object with the attributes ``project``, ``spider``, ``job``, ``start_time`` and ``end_time``, accessible via an :py:interface:`~scrapyd.interfaces.IJobStorage`'s :meth:`~scrapyd.interfaces.IJobStorage.list` or :meth:`~scrapyd.interfaces.IJobStorage.__iter__` methods.
+A **finished job** is an object with the attributes ``project``, ``spider``, ``job``, ``start_time`` and ``end_time``, accessible via an :py:interface:`~scrapyd.interfaces.IJobStorage`'s :meth:`~scrapyd.interfaces.IJobStorage.list` or :meth:`~scrapyd.interfaces.IJobStorage.__iter__` methods. It may also have a ``launch`` attribute, a ``dict`` with the submitted launch parameters under the ``version``, ``settings`` and ``args`` keys; jobs persisted before launch parameters were supported may omit it or only have some keys.
 
 .. list-table::
    :header-rows: 1

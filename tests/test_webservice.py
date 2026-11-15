@@ -8,8 +8,10 @@ import sys
 from unittest.mock import MagicMock, PropertyMock, call
 
 import pytest
+from twisted.internet import error
 from twisted.logger import LogLevel, capturedLogs
-from twisted.web import error
+from twisted.python import failure
+from twisted.web import error as web_error
 
 from scrapyd.exceptions import DirectoryTraversalError, RunnerError
 from scrapyd.interfaces import IEggStorage
@@ -30,7 +32,14 @@ job1 = get_finished_job(
 
 @pytest.fixture
 def scrapy_process():
-    process = ScrapyProcessProtocol(project="p1", spider="s1", job="j1", env={}, args=cliargs)
+    process = ScrapyProcessProtocol(
+        project="p1",
+        spider="s1",
+        job="j1",
+        env={},
+        args=cliargs,
+        launch={"version": "0.1", "settings": {"DOWNLOAD_DELAY": "2"}, "args": {"arg1": "val1"}},
+    )
     process.start_time = datetime.datetime(2001, 2, 3, 4, 5, 6, 9)
     process.end_time = datetime.datetime(2001, 2, 3, 4, 5, 6, 10)
     process.transport = MagicMock()
@@ -58,7 +67,7 @@ def assert_content(txrequest, root, method, basename, args, expected):
 
 def assert_error(txrequest, root, method, basename, args, message):
     txrequest.args = args.copy()
-    with pytest.raises(error.Error) as exc:
+    with pytest.raises(web_error.Error) as exc:
         getattr(root.children[b"%b.json" % basename.encode()], f"render_{method}")(txrequest)
 
     assert exc.value.status == b"200"
@@ -355,6 +364,10 @@ def test_list_jobs(txrequest, root, scrapy_process, args, exists, chdir):
             "end_time": "2001-02-03 04:05:06.000008",
             "log_url": "/logs/p1/s1/j1.log" if exists else None,
             "items_url": "/items/p1/s1/j1.jl" if exists and root.local_items else None,
+            # job1 is built by get_finished_job(), which predates launch parameter persistence.
+            "version": None,
+            "settings": {},
+            "args": {},
         },
     )
     assert_content(txrequest, root, "GET", "listjobs", args, expected)
@@ -370,6 +383,9 @@ def test_list_jobs(txrequest, root, scrapy_process, args, exists, chdir):
             "start_time": "2001-02-03 04:05:06.000009",
             "log_url": "/logs/p1/s1/j1.log" if exists else None,
             "items_url": "/items/p1/s1/j1.jl" if exists and root.local_items else None,
+            "version": "0.1",
+            "settings": {"DOWNLOAD_DELAY": "2"},
+            "args": {"arg1": "val1"},
         }
     )
     assert_content(txrequest, root, "GET", "listjobs", args, expected)
@@ -745,3 +761,108 @@ def test_project_directory_traversal(txrequest, root, method, basename, attach_e
 
     eggstorage = root.app.getComponent(IEggStorage)
     assert eggstorage.get("mybot") == (None, None)
+
+
+def render_list_jobs(txrequest, root):
+    txrequest.args = {}
+    txrequest.method = "GET"
+    content = root.children[b"listjobs.json"].render(txrequest)
+    data = json.loads(content)
+    data.pop("node_name")
+    assert data.pop("status") == "ok"
+    return data
+
+
+def enqueue_and_run_lifecycle(txrequest, root, jobid, launch_kwargs):
+    """Drive a job through pending, running and finished, and return the listjobs.json payload at each stage.
+
+    The job is enqueued via the scheduler directly, mirroring what Schedule.render_POST does after its spider
+    validation, to avoid spawning a ``scrapy list`` subprocess. The poller's pop/rename and the launcher's spawn are
+    exercised for real; only the crawl process is ended synthetically, like the other launcher tests.
+    """
+    root.scheduler.schedule("mybot", "spider1", _job=jobid, **launch_kwargs)
+
+    pending = render_list_jobs(txrequest, root)["pending"]
+
+    # Pop the queued message and hand it to the launcher, as the poller would.
+    message = root.poller.queues["mybot"].pop()
+    message["_project"] = "mybot"
+    message["_spider"] = message.pop("name")
+    root.launcher._spawn_process(message, 0)  # noqa: SLF001
+    process = root.launcher.processes[0]
+
+    running = render_list_jobs(txrequest, root)["running"]
+
+    # End the process, which moves it into the finished job storage.
+    process.processEnded(failure.Failure(error.ProcessDone(0)))
+
+    assert 0 not in root.launcher.processes
+    assert len(root.launcher.finished) == 1
+
+    finished = render_list_jobs(txrequest, root)["finished"]
+    return process, pending, running, finished
+
+
+def test_list_jobs_parameters_lifecycle(txrequest, root_with_egg, chdir):
+    """Launch parameters stay visible, with the same shape, across pending, running and finished jobs.
+
+    The ``root_with_egg`` fixture is parametrized over the memory and SQLite job-storage backends, so this covers both.
+    """
+    root = root_with_egg
+
+    expected_parameters = {
+        "version": "0.1",
+        "settings": {"DOWNLOAD_DELAY": "2"},
+        "args": {"arg1": "val1"},
+    }
+
+    process, pending, running, finished = enqueue_and_run_lifecycle(
+        txrequest,
+        root,
+        "lifecycle",
+        {"_version": "0.1", "settings": {"DOWNLOAD_DELAY": "2"}, "arg1": "val1"},
+    )
+
+    # The process retained the submitted parameters, before environment settings were merged in.
+    assert process.launch == expected_parameters
+    # The environment's own settings (like LOG_FILE) must not leak into the audited parameters.
+    assert "LOG_FILE" not in process.launch["settings"]
+
+    # 1. Pending: the queue exposes the submitted parameters.
+    assert len(pending) == 1
+    assert pending[0]["id"] == "lifecycle"
+    assert {key: pending[0][key] for key in expected_parameters} == expected_parameters
+
+    # 2. Running: the running process reports the same parameters.
+    assert len(running) == 1
+    assert running[0]["id"] == "lifecycle"
+    assert {key: running[0][key] for key in expected_parameters} == expected_parameters
+
+    # 3. Finished: the job storage returns the same parameters (round-tripped through the configured backend).
+    assert len(finished) == 1
+    assert finished[0]["id"] == "lifecycle"
+    assert {key: finished[0][key] for key in expected_parameters} == expected_parameters
+
+    # Nothing remains pending or running.
+    payload = render_list_jobs(txrequest, root)
+    assert payload["running"] == []
+    assert payload["pending"] == []
+
+
+def test_list_jobs_parameters_without_version(txrequest, root_with_egg, chdir):
+    """A job scheduled without an egg version reports a null version at every stage."""
+    root = root_with_egg
+
+    expected_parameters = {"version": None, "settings": {}, "args": {"arg1": "val1"}}
+
+    _process, pending, running, finished = enqueue_and_run_lifecycle(
+        txrequest,
+        root,
+        "noversion",
+        {"arg1": "val1"},
+    )
+
+    assert len(pending) == 1
+    assert {key: pending[0][key] for key in expected_parameters} == expected_parameters
+    assert {key: running[0][key] for key in expected_parameters} == expected_parameters
+    assert {key: finished[0][key] for key in expected_parameters} == expected_parameters

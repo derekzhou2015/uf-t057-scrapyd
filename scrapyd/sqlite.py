@@ -126,13 +126,27 @@ class SqliteFinishedJobs(SqliteMixin):
 
         self.conn.execute(
             f"CREATE TABLE IF NOT EXISTS {table} "
-            "(id integer PRIMARY KEY, project text, spider text, job text, start_time datetime, end_time datetime)"
+            "(id integer PRIMARY KEY, project text, spider text, job text, start_time datetime, end_time datetime, "
+            "launch blob)"
         )
+        # Databases created before launch parameters were persisted lack the "launch" column. Add it, so that old data
+        # remains readable; old rows store NULL and decode to empty parameters.
+        columns = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        if "launch" not in columns:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN launch blob")
+            self.conn.commit()
 
     def add(self, job):
         self.conn.execute(
-            f"INSERT INTO {self.table} (project, spider, job, start_time, end_time) VALUES (?, ?, ?, ?, ?)",
-            (job.project, job.spider, job.job, job.start_time, job.end_time),
+            f"INSERT INTO {self.table} (project, spider, job, start_time, end_time, launch) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                job.project,
+                job.spider,
+                job.job,
+                job.start_time,
+                job.end_time,
+                self.encode(getattr(job, "launch", {"version": None, "settings": {}, "args": {}})),
+            ),
         )
         self.conn.commit()
 
@@ -155,8 +169,9 @@ class SqliteFinishedJobs(SqliteMixin):
                 job,
                 datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S.%f"),
                 datetime.datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S.%f"),
+                self.decode(launch) if launch is not None else {"version": None, "settings": {}, "args": {}},
             )
-            for project, spider, job, start_time, end_time in self.conn.execute(
-                f"SELECT project, spider, job, start_time, end_time FROM {self.table} ORDER BY end_time DESC"
+            for project, spider, job, start_time, end_time, launch in self.conn.execute(
+                f"SELECT project, spider, job, start_time, end_time, launch FROM {self.table} ORDER BY end_time DESC"
             )
         )

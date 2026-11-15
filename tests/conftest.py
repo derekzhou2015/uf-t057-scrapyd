@@ -64,7 +64,9 @@ def pytest_configure(config):
             dist_dir = projects_dir / "dist"
             # Names are like "project-0.0.0-py3.12.egg".
             egg_file = next(path for path in dist_dir.iterdir() if path.suffix == ".egg")
-            egg_file.rename(BASEDIR / "fixtures" / f"{project}.egg")
+            target = BASEDIR / "fixtures" / f"{project}.egg"
+            # Path.rename() fails when the destination exists on Windows (os.rename is not an overwrite there).
+            shutil.move(egg_file, target)
 
             # `--build-scripts` avoids "'build/scripts-3.##' does not exist -- can't clean it".
             setup(script_args=["clean", "--all", "--build-scripts=build"], packages=packages)

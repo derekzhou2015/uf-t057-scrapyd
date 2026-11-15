@@ -257,6 +257,10 @@ Get the pending, running and finished jobs of a project.
       -  The default :ref:`jobstorage` setting stores jobs in memory, such that jobs are lost when the Scrapyd process ends.
       -  ``log_url`` is ``null`` in the response if :ref:`logs_dir` is disabled or the file doesn't exist.
       -  ``items_url`` is ``null`` in the response if :ref:`items_dir` is disabled or the file doesn't exist.
+      -  The ``version``, ``settings`` and ``args`` fields describe the launch parameters submitted to
+         :ref:`schedule.json`, in the same shape for pending, running and finished jobs. ``version`` is ``null`` if no
+         egg version was submitted, and ``settings`` and ``args`` are empty objects for jobs stored before launch
+         parameters were persisted (for example, rows in an old SQLite database).
 
 Supported request methods
   ``GET``
@@ -290,7 +294,10 @@ Example:
                "pid": 93956,
                "start_time": "2012-09-12 10:14:03.594664",
                "log_url": "/logs/myproject/spider3/2f16646cfcaf11e1b0090800272a6d06.log",
-               "items_url": "/items/myproject/spider3/2f16646cfcaf11e1b0090800272a6d06.jl"
+               "items_url": "/items/myproject/spider3/2f16646cfcaf11e1b0090800272a6d06.jl",
+               "version": "0.1",
+               "settings": {"DOWNLOAD_DELAY": "2"},
+               "args": {"arg1": "val1"}
            }
        ],
        "finished": [
@@ -301,7 +308,10 @@ Example:
                "start_time": "2012-09-12 10:14:03.594664",
                "end_time": "2012-09-12 10:24:03.594664",
                "log_url": "/logs/myproject/spider3/2f16646cfcaf11e1b0090800272a6d06.log",
-               "items_url": "/items/myproject/spider3/2f16646cfcaf11e1b0090800272a6d06.jl"
+               "items_url": "/items/myproject/spider3/2f16646cfcaf11e1b0090800272a6d06.jl",
+               "version": "0.1",
+               "settings": {"DOWNLOAD_DELAY": "2"},
+               "args": {"arg1": "val1"}
            }
        ]
    }

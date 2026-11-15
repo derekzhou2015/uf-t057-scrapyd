@@ -10,6 +10,9 @@ Added
 ~~~~~
 
 - Add DEBUG-level messages to the :ref:`schedule.json` and :ref:`cancel.json` webservices.
+- Add ``version``, ``settings`` and ``args`` (the launch parameters submitted to :ref:`schedule.json`) to running and
+  finished jobs in the response from the :ref:`listjobs.json` webservice. The parameters are persisted by both the
+  memory and SQLite :ref:`jobstorage` backends, and SQLite databases from older versions are migrated automatically.
 
 Changed
 ~~~~~~~

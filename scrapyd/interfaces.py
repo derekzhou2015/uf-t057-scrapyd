@@ -213,5 +213,7 @@ class IJobStorage(Interface):
         Iterate over the finished jobs in reverse order by ``end_time``.
 
         A job has the attributes ``project``, ``spider``, ``job``, ``start_time`` and ``end_time`` and may have the
-        attributes ``args`` (``scrapy crawl`` CLI arguments) and ``env`` (environment variables).
+        attributes ``args`` (``scrapy crawl`` CLI arguments), ``env`` (environment variables) and ``launch`` (the
+        submitted launch parameters as a ``dict`` with ``version``, ``settings`` and ``args`` keys). Jobs created
+        before launch parameters were persisted, including rows in old databases, may omit ``launch`` or some keys.
         """

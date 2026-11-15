@@ -1,3 +1,4 @@
+import copy
 import datetime
 import multiprocessing
 import sys
@@ -26,6 +27,29 @@ def get_crawl_args(message):
         *chain.from_iterable(["-s", f"{key}={value}"] for key, value in copied.pop("settings", {}).items()),
         *chain.from_iterable(["-a", f"{key}={value}"] for key, value in copied.items()),  # spider arguments
     ]
+
+
+def get_launch_message(message):
+    """Return the job's launch parameters, in the same shape as the pending jobs in the listjobs.json response.
+
+    The keys that identify a job (``name``, ``_job``, ``_project``, ``_spider``, ``_version`` and ``settings``) are
+    kept out of ``args``, mirroring ListJobs.render_GET() for pending jobs.
+
+    The snapshot is taken before the launcher merges its own settings (LOG_FILE, FEEDS, JOBDIR) into the message, so
+    that the parameters match what was submitted to the schedule.json webservice and stored in the spider queue. A
+    deep copy is returned, since the message's nested settings dict is mutated in place afterwards.
+    """
+    return copy.deepcopy(
+        {
+            "version": message.get("_version"),
+            "settings": message.get("settings", {}),
+            "args": {
+                key: value
+                for key, value in message.items()
+                if key not in ("name", "_job", "_project", "_spider", "_version", "settings")
+            },
+        }
+    )
 
 
 class Launcher(Service):
@@ -57,13 +81,15 @@ class Launcher(Service):
     def _spawn_process(self, message, slot):
         project = message["_project"]
         environment = self.app.getComponent(IEnvironment)
+        # Snapshot the submitted parameters before merging the environment's settings, to match the pending queue.
+        launch = get_launch_message(message)
         message.setdefault("settings", {})
         message["settings"].update(environment.get_settings(message))
 
         env = environment.get_environment(message, slot)
         args = [sys.executable, "-m", self.runner, "crawl", *get_crawl_args(message)]
 
-        process = ScrapyProcessProtocol(project, message["_spider"], message["_job"], env, args)
+        process = ScrapyProcessProtocol(project, message["_spider"], message["_job"], env, args, launch=launch)
         process.deferred.addBoth(self._process_finished, slot)
 
         try:
@@ -96,7 +122,7 @@ class Launcher(Service):
 
 # https://docs.twisted.org/en/stable/api/twisted.internet.protocol.ProcessProtocol.html
 class ScrapyProcessProtocol(protocol.ProcessProtocol):  # noqa: PLW1641 missing __hash__ method
-    def __init__(self, project, spider, job, env, args):
+    def __init__(self, project, spider, job, env, args, launch=None):
         self.project = project
         self.spider = spider
         self.job = job
@@ -105,6 +131,9 @@ class ScrapyProcessProtocol(protocol.ProcessProtocol):  # noqa: PLW1641 missing 
         self.end_time = None
         self.args = args
         self.env = env
+        # The launch parameters (version, settings, spider args), in the shape of the listjobs.json pending jobs.
+        # Absent for jobs created by code that predates parameter persistence, including rows in old databases.
+        self.launch = {"version": None, "settings": {}, "args": {}} if launch is None else launch
         self.deferred = defer.Deferred()
 
     # For equality assertions in tests.
@@ -118,13 +147,15 @@ class ScrapyProcessProtocol(protocol.ProcessProtocol):  # noqa: PLW1641 missing 
             and self.end_time == other.end_time
             and self.args == other.args
             and self.env == other.env
+            and self.launch == other.launch
         )
 
     # For error messages in tests.
     def __repr__(self):
         return (
             f"ScrapyProcessProtocol(project={self.project} spider={self.spider} job={self.job} pid={self.pid} "
-            f"start_time={self.start_time} end_time={self.end_time} args={self.args} env={self.env})"
+            f"start_time={self.start_time} end_time={self.end_time} args={self.args} env={self.env} "
+            f"launch={self.launch})"
         )
 
     def outReceived(self, data):

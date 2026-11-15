@@ -359,6 +359,8 @@ class ListJobs(WsResource):
        Add ``log_url`` and ``items_url`` to finished jobs in the response.
     .. versionchanged:: 1.5.0
        Add ``version``, ``settings`` and ``args`` to pending jobs in the response.
+    .. versionchanged:: 1.7.0
+       Add ``version``, ``settings`` and ``args`` to running and finished jobs in the response.
     """
 
     @param("project", required=False)
@@ -389,6 +391,7 @@ class ListJobs(WsResource):
                     "start_time": str(process.start_time),
                     "log_url": self.root.get_log_url(process),
                     "items_url": self.root.get_item_url(process),
+                    **self._launch_parameters(process),
                 }
                 for process in self.root.launcher.processes.values()
                 if project is None or process.project == project
@@ -402,10 +405,24 @@ class ListJobs(WsResource):
                     "end_time": str(finished.end_time),
                     "log_url": self.root.get_log_url(finished),
                     "items_url": self.root.get_item_url(finished),
+                    **self._launch_parameters(finished),
                 }
                 for finished in self.root.launcher.finished
                 if project is None or finished.project == project
             ],
+        }
+
+    @staticmethod
+    def _launch_parameters(process):
+        """Return the launch parameters, tolerating jobs that predate parameter persistence.
+
+        Old in-memory jobs and rows in old databases may lack a ``launch`` attribute or may carry only some keys.
+        """
+        launch = getattr(process, "launch", None) or {}
+        return {
+            "version": launch.get("version"),
+            "settings": launch.get("settings", {}),
+            "args": launch.get("args", {}),
         }
 
 

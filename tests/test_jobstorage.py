@@ -59,3 +59,27 @@ class TestJobStorage:
         assert len(jobstorage) == 2
         assert actual == list(jobstorage)
         assert actual == [job3, job2]
+
+    def test_launch_persisted(self, cls, tmpdir):
+        jobstorage = cls(config(tmpdir))
+        launch = {"version": "0.1", "settings": {"DOWNLOAD_DELAY": "2"}, "args": {"arg1": "val1"}}
+
+        job = get_finished_job("p1", "s1", "j1")
+        job.launch = launch
+        jobstorage.add(job)
+
+        actual = jobstorage.list()
+
+        assert len(actual) == 1
+        assert actual[0].launch == launch
+
+    def test_launch_defaults_for_legacy_job(self, cls, tmpdir):
+        """A job without launch parameters round-trips to the documented empty shape, without error."""
+        jobstorage = cls(config(tmpdir))
+
+        jobstorage.add(get_finished_job("p1", "s1", "j1"))
+
+        actual = jobstorage.list()
+
+        assert len(actual) == 1
+        assert actual[0].launch == {"version": None, "settings": {}, "args": {}}
